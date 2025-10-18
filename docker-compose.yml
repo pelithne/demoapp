@@ -1,0 +1,110 @@
+# Docker Compose for local development
+version: '3.8'
+
+services:
+  # PostgreSQL database
+  db:
+    image: postgres:15-alpine
+    container_name: votingapp-db
+    environment:
+      POSTGRES_DB: votingapp
+      POSTGRES_USER: ${POSTGRES_USER:-devuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-DevPassword123!}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-devuser}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # .NET Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: development
+    container_name: votingapp-api
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__DefaultConnection=Host=db;Database=votingapp;Username=${POSTGRES_USER:-devuser};Password=${POSTGRES_PASSWORD:-DevPassword123!}
+      - AzureStorage__UseLocalEmulator=true
+      - AzureStorage__ConnectionString=UseDevelopmentStorage=true
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./backend:/app
+      - ./images:/app/wwwroot/images
+    depends_on:
+      db:
+        condition: service_healthy
+    develop:
+      watch:
+        - action: rebuild
+          path: ./backend
+          ignore:
+            - ./backend/bin
+            - ./backend/obj
+
+  # React Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: development
+    container_name: votingapp-web
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8080
+      - VITE_WS_URL=ws://localhost:8080/votehub
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    develop:
+      watch:
+        - action: sync
+          path: ./frontend/src
+          target: /app/src
+        - action: rebuild
+          path: ./frontend/package.json
+
+  # Azure Storage Emulator (Azurite)
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    container_name: votingapp-storage
+    ports:
+      - "10000:10000"  # Blob service
+      - "10001:10001"  # Queue service  
+      - "10002:10002"  # Table service
+    volumes:
+      - azurite_data:/data
+    command: "azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --location /data --debug /data/debug.log"
+
+  # Redis for caching (optional)
+  redis:
+    image: redis:7-alpine
+    container_name: votingapp-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+
+volumes:
+  postgres_data:
+    name: votingapp_postgres_data
+  azurite_data:
+    name: votingapp_azurite_data
+  redis_data:
+    name: votingapp_redis_data
+
+networks:
+  default:
+    name: votingapp_network

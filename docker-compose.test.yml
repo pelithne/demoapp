@@ -1,0 +1,54 @@
+# Docker Compose for testing environment
+version: '3.8'
+
+services:
+  # Test database
+  test-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: votingapp_test
+      POSTGRES_USER: testuser
+      POSTGRES_PASSWORD: TestPassword123!
+    ports:
+      - "5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  # Backend for testing
+  test-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: test
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Testing
+      - ConnectionStrings__DefaultConnection=Host=test-db;Database=votingapp_test;Username=testuser;Password=TestPassword123!
+    depends_on:
+      - test-db
+    command: ["dotnet", "test", "--logger", "trx", "--results-directory", "/test-results"]
+    volumes:
+      - ./test-results:/test-results
+
+  # Frontend tests
+  test-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: test
+    command: ["npm", "run", "test:ci"]
+    volumes:
+      - ./test-results:/app/test-results
+
+  # Integration tests
+  integration-tests:
+    build:
+      context: ./tests/integration
+      dockerfile: Dockerfile
+    environment:
+      - API_BASE_URL=http://test-backend:8080
+      - DB_CONNECTION_STRING=Host=test-db;Database=votingapp_test;Username=testuser;Password=TestPassword123!
+    depends_on:
+      - test-backend
+      - test-db
+    volumes:
+      - ./test-results:/test-results
